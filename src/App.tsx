@@ -5,10 +5,13 @@ import { AuthButton } from './components/AuthButton';
 import { GearDashboard } from './components/GearDashboard';
 import { GearDatabase } from './components/GearDatabase';
 import { AIConsultant } from './components/AIConsultant';
-import { 
-  BarChart3, Tag, MessageCircle, Anchor, RefreshCw, 
-  Settings, HelpCircle, FileSpreadsheet, ExternalLink 
+import {
+  BarChart3, Tag, MessageCircle, Anchor, RefreshCw,
+  Settings, HelpCircle, FileSpreadsheet, ExternalLink, LogIn
 } from 'lucide-react';
+
+const DEFAULT_SPREADSHEET_ID = import.meta.env.VITE_DEFAULT_SPREADSHEET_ID as string;
+const DEFAULT_SHEET_GID = Number(import.meta.env.VITE_DEFAULT_SHEET_GID);
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<'dashboard' | 'database' | 'consultant'>('dashboard');
@@ -32,90 +35,97 @@ export default function App() {
   });
   const [showSettings, setShowSettings] = useState(false);
 
-  // Core fetch function (100% client-side for GitHub Pages static compatibility)
+  // Core fetch function - always requires an authenticated OAuth token,
+  // since the spreadsheet is now access-restricted to specific team member accounts.
   const fetchSheetData = useCallback(async (tokenToUse?: string | null, customId?: string) => {
+    if (!tokenToUse) {
+      // Not signed in: nothing to fetch, and nothing should be shown.
+      setRentals([]);
+      setError(null);
+      setIsLoading(false);
+      return;
+    }
+
     setIsLoading(true);
     setError(null);
     try {
-      let rentalsData: RentalRecord[] = [];
+      const spreadsheetId = customId || DEFAULT_SPREADSHEET_ID;
+      const headers: HeadersInit = { 'Authorization': `Bearer ${tokenToUse}` };
 
-      // If authorized user provides their own spreadsheet ID, fetch directly from Google Sheets API
-      if (tokenToUse && customId) {
-        const url = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(customId)}/values/${encodeURIComponent('表單回應 1!A1:P200')}`;
-        const headers: HeadersInit = {
-          'Authorization': `Bearer ${tokenToUse}`
-        };
-        
-        const res = await fetch(url, { headers });
-        if (!res.ok) {
-          throw new Error(`連線 Google 試算表 API 失敗 (HTTP ${res.status})。請確認您輸入的試算表 ID 是否正確，且您是否具備存取該試算表的權限。`);
-        }
+      // Resolve the actual sheet/tab title (Sheets API needs a title, not a gid).
+      const metaRes = await fetch(
+        `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}?fields=sheets.properties(sheetId,title)`,
+        { headers }
+      );
+      if (!metaRes.ok) {
+        throw new Error(`連線 Google 試算表 API 失敗 (HTTP ${metaRes.status})。請確認試算表 ID 是否正確，且您的 Google 帳號是否具備存取權限。`);
+      }
+      const metaData = await metaRes.json();
+      const sheetsList: { properties: { sheetId: number; title: string } }[] = metaData.sheets || [];
+      const targetSheet = (!customId && sheetsList.find(s => s.properties.sheetId === DEFAULT_SHEET_GID)) || sheetsList[0];
+      if (!targetSheet) {
+        throw new Error('試算表中找不到任何工作表分頁。');
+      }
+      const sheetTitle = targetSheet.properties.title;
 
-        const data = await res.json();
-        const rawValues = data.values;
-        if (!rawValues || rawValues.length < 2) {
-          throw new Error('試算表中無任何租借紀錄，或資料格式與欄位名稱不符規範。');
-        }
-        
-        // Map row arrays to CSV grid parser structure
-        const headersList = rawValues[0].map((h: string) => h.toLowerCase());
-        const findIdx = (kws: string[]) => headersList.findIndex((h: string) => kws.some(k => h.includes(k)));
-        
-        const borrowerIdx = findIdx(['借用人']);
-        if (borrowerIdx < 0) {
-          throw new Error('試算表中找不到「借用人」欄位，請確認試算表格式。');
-        }
-
-        const records: RentalRecord[] = [];
-        for (let r = 1; r < rawValues.length; r++) {
-          const row = rawValues[r];
-          if (!row || row.length === 0 || !row[borrowerIdx]) continue;
-          
-          const getVal = (idx: number, fallback = '') => (idx >= 0 && idx < row.length ? row[idx] : fallback);
-          const parseNum = (str: string) => {
-            const n = parseInt(str.replace(/[^0-9]/g, ''), 10);
-            return isNaN(n) ? 0 : n;
-          };
-          
-          records.push({
-            id: `${r}-${getVal(findIdx(['時間'])) || Date.now()}-${getVal(borrowerIdx)}`,
-            timestamp: getVal(findIdx(['時間戳記', '時間'])),
-            borrower: getVal(borrowerIdx),
-            confirmed: getVal(findIdx(['是否已確認', '確認'])).includes('是') || getVal(findIdx(['是否已確認', '確認'])).includes('已') || getVal(findIdx(['是否已確認', '確認'])).includes('v') || getVal(findIdx(['是否已確認', '確認'])).includes('o'),
-            paymentConfirmed: getVal(findIdx(['付款', '追帳'])).includes('是') || getVal(findIdx(['付款', '追帳'])).includes('已') || getVal(findIdx(['付款', '追帳'])).includes('v') || getVal(findIdx(['付款', '追帳'])).includes('o'),
-            rentalDate: getVal(findIdx(['借用日期'])) || getVal(findIdx(['時間戳記', '時間'])).split(' ')[0] || '',
-            returnDate: getVal(findIdx(['歸還'])),
-            carbonPaddlesCount: parseNum(getVal(findIdx(['碳纖維槳幾隻', '碳纖維槳數量']))),
-            carbonPaddleNumbers: getVal(findIdx(['碳纖維槳編號'])),
-            woodPaddlesCount: parseNum(getVal(findIdx(['木槳幾隻', '木槳數量']))),
-            woodPaddleNumbers: getVal(findIdx(['木槳編號'])),
-            lifeJacketRequested: getVal(findIdx(['救生衣'])).includes('借') || getVal(findIdx(['救衣'])).includes('需'),
-            lifeJacketCount: parseNum(getVal(findIdx(['救生衣']))) || (getVal(findIdx(['救生衣'])).includes('借') || getVal(findIdx(['救生衣'])).includes('需') ? 1 : 0),
-            buttPadRequested: getVal(findIdx(['屁墊'])).includes('借') || getVal(findIdx(['屁墊'])).includes('需'),
-            buttPadCount: parseNum(getVal(findIdx(['屁墊']))) || (getVal(findIdx(['屁墊'])).includes('借') || getVal(findIdx(['屁墊'])).includes('需') ? 1 : 0),
-            nextPracticePrep: getVal(findIdx(['下次練習', '幹部幫我準備'])),
-            notes: getVal(findIdx(['新人', '備註'])),
-            quantity: 1
-          });
-        }
-        rentalsData = records;
-      } else {
-        // Direct browser CSV fetch of public spreadsheet
-        const spreadsheetId = '1VOencdl4jRY2xh-L-ZkE7QVaP_XcYrTnZ8rL4FI1SFI';
-        const gid = '288109580';
-        const url = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/export?format=csv&gid=${gid}`;
-        
-        const res = await fetch(url);
-        if (!res.ok) {
-          throw new Error(`獲取 Google 試算表 CSV 失敗 (HTTP ${res.status})。`);
-        }
-        
-        const csvText = await res.text();
-        const { mapCSVToRentals } = await import('./utils/csvParser');
-        rentalsData = mapCSVToRentals(csvText);
+      const range = `'${sheetTitle}'!A1:P200`;
+      const res = await fetch(
+        `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}/values/${encodeURIComponent(range)}`,
+        { headers }
+      );
+      if (!res.ok) {
+        throw new Error(`連線 Google 試算表 API 失敗 (HTTP ${res.status})。請確認您輸入的試算表 ID 是否正確，且您是否具備存取該試算表的權限。`);
       }
 
-      setRentals(rentalsData);
+      const data = await res.json();
+      const rawValues: string[][] = data.values;
+      if (!rawValues || rawValues.length < 2) {
+        throw new Error('試算表中無任何租借紀錄，或資料格式與欄位名稱不符規範。');
+      }
+
+      // Map row arrays to CSV grid parser structure
+      const headersList = rawValues[0].map((h: string) => h.toLowerCase());
+      const findIdx = (kws: string[]) => headersList.findIndex((h: string) => kws.some(k => h.includes(k)));
+
+      const borrowerIdx = findIdx(['借用人']);
+      if (borrowerIdx < 0) {
+        throw new Error('試算表中找不到「借用人」欄位，請確認試算表格式。');
+      }
+
+      const records: RentalRecord[] = [];
+      for (let r = 1; r < rawValues.length; r++) {
+        const row = rawValues[r];
+        if (!row || row.length === 0 || !row[borrowerIdx]) continue;
+
+        const getVal = (idx: number, fallback = '') => (idx >= 0 && idx < row.length ? row[idx] : fallback);
+        const parseNum = (str: string) => {
+          const n = parseInt(str.replace(/[^0-9]/g, ''), 10);
+          return isNaN(n) ? 0 : n;
+        };
+
+        records.push({
+          id: `${r}-${getVal(findIdx(['時間'])) || Date.now()}-${getVal(borrowerIdx)}`,
+          timestamp: getVal(findIdx(['時間戳記', '時間'])),
+          borrower: getVal(borrowerIdx),
+          confirmed: getVal(findIdx(['是否已確認', '確認'])).includes('是') || getVal(findIdx(['是否已確認', '確認'])).includes('已') || getVal(findIdx(['是否已確認', '確認'])).includes('v') || getVal(findIdx(['是否已確認', '確認'])).includes('o'),
+          paymentConfirmed: getVal(findIdx(['付款', '追帳'])).includes('是') || getVal(findIdx(['付款', '追帳'])).includes('已') || getVal(findIdx(['付款', '追帳'])).includes('v') || getVal(findIdx(['付款', '追帳'])).includes('o'),
+          rentalDate: getVal(findIdx(['借用日期'])) || getVal(findIdx(['時間戳記', '時間'])).split(' ')[0] || '',
+          returnDate: getVal(findIdx(['歸還'])),
+          carbonPaddlesCount: parseNum(getVal(findIdx(['碳纖維槳幾隻', '碳纖維槳數量']))),
+          carbonPaddleNumbers: getVal(findIdx(['碳纖維槳編號'])),
+          woodPaddlesCount: parseNum(getVal(findIdx(['木槳幾隻', '木槳數量']))),
+          woodPaddleNumbers: getVal(findIdx(['木槳編號'])),
+          lifeJacketRequested: getVal(findIdx(['救生衣'])).includes('借') || getVal(findIdx(['救衣'])).includes('需'),
+          lifeJacketCount: parseNum(getVal(findIdx(['救生衣']))) || (getVal(findIdx(['救生衣'])).includes('借') || getVal(findIdx(['救生衣'])).includes('需') ? 1 : 0),
+          buttPadRequested: getVal(findIdx(['屁墊'])).includes('借') || getVal(findIdx(['屁墊'])).includes('需'),
+          buttPadCount: parseNum(getVal(findIdx(['屁墊']))) || (getVal(findIdx(['屁墊'])).includes('借') || getVal(findIdx(['屁墊'])).includes('需') ? 1 : 0),
+          nextPracticePrep: getVal(findIdx(['下次練習', '幹部幫我準備'])),
+          notes: getVal(findIdx(['新人', '備註'])),
+          quantity: 1
+        });
+      }
+
+      setRentals(records);
     } catch (err: any) {
       console.error('Fetch data error:', err);
       setError(err.message || '無法下載或解析裝備試算表。');
@@ -124,26 +134,16 @@ export default function App() {
     }
   }, []);
 
-  // Fetch public or cached custom spreadsheet on mount
+  // Fetch whenever the signed-in token (or chosen custom sheet) changes.
+  // Signing out clears the token, which clears the rentals via the guard in fetchSheetData.
   useEffect(() => {
-    const cachedId = localStorage.getItem('customSpreadsheetId') || '';
-    if (oauthToken && cachedId) {
-      fetchSheetData(oauthToken, cachedId);
-    } else {
-      fetchSheetData(null, '');
-    }
+    fetchSheetData(oauthToken, customSpreadsheetId);
   }, [fetchSheetData, oauthToken]);
 
   const handleAuthChange = useCallback((currentUser: User | null, token: string | null) => {
     setUser(currentUser);
     setOauthToken(token);
-    const cachedId = localStorage.getItem('customSpreadsheetId') || '';
-    if (currentUser && cachedId) {
-      fetchSheetData(token, cachedId);
-    } else {
-      fetchSheetData(null, '');
-    }
-  }, [fetchSheetData]);
+  }, []);
 
   const handleApplyCustomSheet = () => {
     if (!customSpreadsheetId.trim()) {
@@ -189,9 +189,11 @@ export default function App() {
                 {customSpreadsheetId ? '自訂試算表' : '預設公用資料庫 (試算表)'}
               </span>
             </div>
-            <a 
-              href="https://docs.google.com/spreadsheets/d/1VOencdl4jRY2xh-L-ZkE7QVaP_XcYrTnZ8rL4FI1SFI/edit?resourcekey=&gid=288109580#gid=288109580" 
-              target="_blank" 
+            <a
+              href={customSpreadsheetId
+                ? `https://docs.google.com/spreadsheets/d/${customSpreadsheetId}/edit`
+                : `https://docs.google.com/spreadsheets/d/${DEFAULT_SPREADSHEET_ID}/edit?gid=${DEFAULT_SHEET_GID}#gid=${DEFAULT_SHEET_GID}`}
+              target="_blank"
               rel="noreferrer" 
               className="text-[#06C755] hover:text-[#05b54c] font-bold flex items-center gap-0.5 shrink-0 transition-colors"
             >
@@ -294,12 +296,20 @@ export default function App() {
           {/* Active Tab View Rendering */}
           <div className="pb-4">
             {activeTab === 'dashboard' && (
-              <GearDashboard 
-                rentals={rentals} 
-                isLoading={isLoading} 
-                onRefresh={() => fetchSheetData(oauthToken, customSpreadsheetId)} 
-                error={error}
-              />
+              oauthToken ? (
+                <GearDashboard
+                  rentals={rentals}
+                  isLoading={isLoading}
+                  onRefresh={() => fetchSheetData(oauthToken, customSpreadsheetId)}
+                  error={error}
+                />
+              ) : (
+                <div className="bg-white rounded-2xl border border-slate-200 p-8 text-center space-y-3">
+                  <LogIn size={32} className="text-slate-300 mx-auto" />
+                  <p className="text-sm font-semibold text-slate-600">請先登入 Google 帳戶</p>
+                  <p className="text-xs text-slate-400">裝備租借狀態僅開放給已登入的隊員查詢，請於下方連結您的 Google 帳戶。</p>
+                </div>
+              )
             )}
 
             {activeTab === 'database' && <GearDatabase />}
