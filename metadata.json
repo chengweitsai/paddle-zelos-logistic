@@ -1,0 +1,1 @@
+{"name":"龍舟公用裝備狀態","description":"適合手機點閱的龍舟公用裝備租借與狀態查詢工具，支援關鍵字查詢各裝備詳細數值與獲取途徑，並整合 Google 試算表作為資料庫。","requestFramePermissions":[],"majorCapabilities":["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]}
