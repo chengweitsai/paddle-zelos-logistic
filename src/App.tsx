@@ -134,7 +134,7 @@ export default function App() {
     }
   }, [fetchSheetData, oauthToken]);
 
-  const handleAuthChange = (currentUser: User | null, token: string | null) => {
+  const handleAuthChange = useCallback((currentUser: User | null, token: string | null) => {
     setUser(currentUser);
     setOauthToken(token);
     const cachedId = localStorage.getItem('customSpreadsheetId') || '';
@@ -143,7 +143,7 @@ export default function App() {
     } else {
       fetchSheetData(null, '');
     }
-  };
+  }, [fetchSheetData]);
 
   const handleApplyCustomSheet = () => {
     if (!customSpreadsheetId.trim()) {
