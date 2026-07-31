@@ -4,7 +4,6 @@ import dotenv from 'dotenv';
 import { GoogleGenAI } from '@google/genai';
 import { createServer as createViteServer } from 'vite';
 import { GEAR_DATABASE } from './src/data';
-import { mapCSVToRentals } from './src/utils/csvParser';
 
 dotenv.config();
 
@@ -24,38 +23,7 @@ const ai = new GoogleGenAI({
 });
 
 // API Routes defined FIRST
-// 1. Fetch public Google Sheets CSV and parse into structured rentals
-app.get('/api/sheets/public', async (req, res) => {
-  try {
-    const spreadsheetId = '1VOencdl4jRY2xh-L-ZkE7QVaP_XcYrTnZ8rL4FI1SFI';
-    const gid = '288109580';
-    const url = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/export?format=csv&gid=${gid}`;
-    
-    const response = await fetch(url);
-    if (!response.ok) {
-      throw new Error(`Failed to fetch spreadsheet from Google. Status: ${response.status}`);
-    }
-    
-    const csvText = await response.text();
-    const rentals = mapCSVToRentals(csvText);
-    
-    res.json({
-      success: true,
-      spreadsheetId,
-      gid,
-      count: rentals.length,
-      rentals
-    });
-  } catch (error: any) {
-    console.error('Error fetching public sheet:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message || 'Failed to fetch and parse public gear sheet'
-    });
-  }
-});
-
-// 2. Fetch custom spreadsheet using user OAuth Token (Sheets API Proxy)
+// Fetch custom spreadsheet using user OAuth Token (Sheets API Proxy)
 app.get('/api/sheets/custom', async (req, res) => {
   const token = req.headers.authorization;
   if (!token) {
