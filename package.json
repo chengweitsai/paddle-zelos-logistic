@@ -3,6 +3,9 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "engines": {
+    "node": "20.11.1"
+  },
   "homepage": "https://chengweitsai.github.io/paddle-zelos-logistic",
   "scripts": {
     "dev": "tsx server.ts",
